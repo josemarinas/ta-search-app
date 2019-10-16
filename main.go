@@ -11,7 +11,7 @@ import(
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	. "github.com/logrusorgru/aurora"
-	// "github.com/rs/xid"
+	"github.com/rs/xid"
 )
 const sqsMaxMessages int64 = 5
 const sqsPollWaitSeconds int64 = 1
@@ -29,29 +29,31 @@ func main() {
 	if err != nil {
 		return
 	}
-	// outputQueue, err := getQueueUrlByTag("Flow", "output")
+	outputQueue, err := getQueueUrlByTag("Flow", "output")
 	if err != nil {
 		return
 	}
-	fmt.Println(searchMessages(aws.String("Foo"), "paa"))
+	// fmt.Println(searchMessages(aws.String("Foo"), "paa"))
 	inMsgChan := make(chan *sqs.Message, sqsMaxMessages)
 	go pollQueue(inMsgChan, &inputQueue)
 	for message := range inMsgChan {
 		user := message.MessageAttributes["User"].StringValue
-		// command := message.MessageAttributes["Command"].StringValue
+		command := message.MessageAttributes["Command"].StringValue
 		session := message.Attributes["MessageGroupId"]
 		timestamp := message.Attributes["SentTimestamp"]
-		// found := searchMessages(user, message.Body)
-
+		found := searchMessages(user, *message.Body)
+		if(found == ""){
+			found = "Not Found"
+		}
 		log.Infof(
 		"%s message: Body='%s', User='%s', Session='%s', Timestamp='%v'\n",
 		Green("Received"), Blue(*message.Body), Blue(*user), Blue(*session), Blue(*timestamp))
-		// sendMessage(message.Body, user, session, &outputQueue, command)
+		sendMessage(&found, user, session, &outputQueue, command)
 		log.Infof(
 		"%s message: Body='%s', User='%s', Session='%s', Timestamp='%s'\n",
-		Yellow("Echoed"), Blue(*message.Body), Blue(*user), Blue(*session), Blue(*timestamp))
+		Yellow("Sent"), Blue(found), Blue(*user), Blue(*session), Blue(*timestamp))
 			
-		// deleteMessage(message.ReceiptHandle, &inputQueue)
+		deleteMessage(message.ReceiptHandle, &inputQueue)
 	
 		log.Infof(
 		"%s message: Body='%s', User='%s', Session='%s', Timestamp='%s'\n",
@@ -139,4 +141,34 @@ func getQueueUrlByTag(tag string, tagValue string)(string, error) {
 		}
 	}
 	return "", fmt.Errorf("Cant find queue with tag `%s = %s`", tag, tagValue)
+}
+func sendMessage(message *string, user *string, token *string, queue *string, command *string) {
+	_, err := sqsService.SendMessage(&sqs.SendMessageInput{
+		QueueUrl:            	queue,
+		MessageBody:					message,
+		MessageGroupId:				token,
+		MessageDeduplicationId: aws.String(xid.New().String()),
+		MessageAttributes: map[string]*sqs.MessageAttributeValue{
+			"User": &sqs.MessageAttributeValue{
+				DataType:    aws.String("String"),
+				StringValue: user,
+			},
+			"Command": &sqs.MessageAttributeValue{
+					DataType:    aws.String("String"),
+					StringValue: command,
+			},
+		},
+	})
+	if err != nil {
+		log.Errorf("Failed to send sqs message %v", err)
+	}
+}
+func deleteMessage(receiptHandle *string, queue *string) {
+	_, err := sqsService.DeleteMessage(&sqs.DeleteMessageInput{
+		QueueUrl:            	queue,
+		ReceiptHandle:				receiptHandle,
+	})
+	if err != nil {
+		log.Errorf("Failed to delete sqs message %v", err)
+	}
 }
