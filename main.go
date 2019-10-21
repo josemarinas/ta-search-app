@@ -11,10 +11,10 @@ import(
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	. "github.com/logrusorgru/aurora"
-	"github.com/rs/xid"
+	// "github.com/rs/xid"
 )
-const sqsMaxMessages int64 = 5
-const sqsPollWaitSeconds int64 = 1
+const sqsMaxMessages int64 = 1
+const sqsPollWaitSeconds int64 = 2
 var sess = session.Must(session.NewSessionWithOptions(session.Options{
 	SharedConfigState: session.SharedConfigEnable,
 }))
@@ -39,7 +39,7 @@ func main() {
 	for message := range inMsgChan {
 		user := message.MessageAttributes["User"].StringValue
 		command := message.MessageAttributes["Command"].StringValue
-		session := message.Attributes["MessageGroupId"]
+		session := message.MessageAttributes["Session"].StringValue
 		timestamp := message.Attributes["SentTimestamp"]
 		found := searchMessages(user, *message.Body)
 		if(found == ""){
@@ -64,11 +64,11 @@ func main() {
 func pollQueue(chn chan<- *sqs.Message, queue *string) {
 	for {
     output, err := sqsService.ReceiveMessage(&sqs.ReceiveMessageInput{
-			AttributeNames:					aws.StringSlice([]string{"SentTimestamp","MessageGroupId"}),
+			AttributeNames:					aws.StringSlice([]string{"SentTimestamp"}),
       QueueUrl:            		queue,
       MaxNumberOfMessages: 		aws.Int64(sqsMaxMessages),
 			WaitTimeSeconds:     		aws.Int64(sqsPollWaitSeconds),
-			MessageAttributeNames:	aws.StringSlice([]string{"User", "Command"}),//,"Session", "SentTimestamp"}),
+			MessageAttributeNames:	aws.StringSlice([]string{"User", "Command", "Session"}),//,"Session", "SentTimestamp"}),
     })
 
     if err != nil {
@@ -79,7 +79,12 @@ func pollQueue(chn chan<- *sqs.Message, queue *string) {
 			if (*message.MessageAttributes["Command"].StringValue == "search") {
 				chn <- message
 			} else {
-				log.Warnf("Echo system cant handle this request, waiting until timeout")
+				sqsService.ChangeMessageVisibility(&sqs.ChangeMessageVisibilityInput{
+					QueueUrl:	queue,
+					ReceiptHandle: message.ReceiptHandle,
+					VisibilityTimeout: aws.Int64(0),
+				})
+				log.Warnf("Search app cant handle this request")
 			}
     }
   }
@@ -146,8 +151,8 @@ func sendMessage(message *string, user *string, token *string, queue *string, co
 	_, err := sqsService.SendMessage(&sqs.SendMessageInput{
 		QueueUrl:            	queue,
 		MessageBody:					message,
-		MessageGroupId:				token,
-		MessageDeduplicationId: aws.String(xid.New().String()),
+		// MessageGroupId:				token,
+		// MessageDeduplicationId: aws.String(xid.New().String()),
 		MessageAttributes: map[string]*sqs.MessageAttributeValue{
 			"User": &sqs.MessageAttributeValue{
 				DataType:    aws.String("String"),
@@ -156,6 +161,10 @@ func sendMessage(message *string, user *string, token *string, queue *string, co
 			"Command": &sqs.MessageAttributeValue{
 					DataType:    aws.String("String"),
 					StringValue: command,
+			},
+			"Session": &sqs.MessageAttributeValue{
+					DataType:    aws.String("String"),
+					StringValue: token,
 			},
 		},
 	})
