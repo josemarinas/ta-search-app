@@ -89,7 +89,7 @@ func pollQueue(chn chan<- *sqs.Message, queue *string) {
     }
   }
 }
-func searchMessages(user *string, search string)(found string) {
+func searchMessages(user *string, search string) string {
 	var ret string
 	params := &s3.ListObjectsInput {
     Bucket: aws.String(bucket),
